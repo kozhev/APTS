@@ -216,9 +216,9 @@ def test_serve_module_registry():
     assert hasattr(serve, "HarnessControl")
 
     core = set(serve.CORE_TOOLS)
-    assert core == {"create_engagement", "engagement_status", "list_artifacts",
-                    "get_artifact", "get_report", "stop_engagement",
-                    "resume_engagement"}
+    assert core == {"apts_health", "create_engagement", "engagement_status",
+                    "list_artifacts", "get_artifact", "get_report",
+                    "stop_engagement", "resume_engagement"}
 
     db = set(serve.DB_TOOLS)
     expected_db = {"apts_capabilities", "list_engagements", "get_directives",

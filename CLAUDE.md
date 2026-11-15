@@ -128,3 +128,38 @@ target you are authorised to test.**
 - `docker-compose.lean.yml` — `mcp-native` + `database` only.
 - `Makefile` — `setup`, `tools`, `db`, `run`, `run-nodb`, `down`, `logs`.
 - `requirements-runner.txt` — pinned host-process deps.
+
+## Drive it from Claude Code (MCP entry point)
+
+The repo ships `.mcp.json`, so Claude Code auto-discovers an **`apts`** MCP server
+(it spawns `scripts/apts-mcp.sh` over stdio — no port, no separate process to
+manage). Claude Code (on Sonnet) then *drives* the harness; the pipeline's
+per-stage LLM work still runs on the cheap worker model (`APTS_LOOP_LLM_MODEL`),
+so **your Claude plan is never billed for the hundreds of pipeline calls** — only
+the handful of orchestration turns.
+
+**One-time setup**
+```bash
+make setup          # host venv + deps
+make up             # Postgres + mcp-native (the backend the harness needs)
+# start a target reachable from mcp-native, e.g. on the apts-lean network:
+docker run -d --name juice --hostname juice-shop \
+  --network apts-lean_apts-lean-net bkimminich/juice-shop:v17.1.1
+```
+If Claude Code doesn't pick up `.mcp.json` automatically:
+`claude mcp add apts -- bash scripts/apts-mcp.sh`
+
+**The flow (what Claude Code calls)**
+1. `apts_health` — confirm the backend is up (call this first; it points you to
+   `make up` if not).
+2. `apts_capabilities` — what a run needs.
+3. `create_engagement(target_url="http://juice-shop:3000", domains=["juice-shop"],
+   objective="...")` — returns an `engagement_id`, pipeline starts in the background.
+4. `engagement_status(id)` — poll until `completed` (watch `per_agent`).
+5. `get_report(id)` for the client report; `get_artifact(id, stage)`,
+   `get_recon_findings(id)`, `get_loot(id)`, `search_run(id, query)` to drill in.
+6. `stop_engagement(id)` / `resume_engagement(id)` to control a long run.
+
+The server binds nothing on the network in stdio mode. For an external target,
+front it with the reverse proxy (`APTS_PROXY_UPSTREAM=...`, see above) and point
+`create_engagement` at the proxy.

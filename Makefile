@@ -77,7 +77,7 @@ DB_ENV = \
 # run/serve emits traces. Absent → runs proceed untraced, exactly as before.
 LANGFUSE_SRC = [ -f tokens/langfuse.env ] && . ./tokens/langfuse.env;
 
-.PHONY: help setup certs tools db run run-nodb serve serve-nodb down logs require-target
+.PHONY: help setup certs tools db up run run-nodb serve serve-nodb down logs require-target
 
 help:
 	@echo "APTS easy-run targets:"
@@ -113,6 +113,13 @@ tools: certs
 db: certs
 	$(COMPOSE) up -d database
 	@echo "database up on 127.0.0.1:5432 (schema init runs automatically on a fresh volume)"
+
+# Bring up the whole backend the harness needs: Postgres + the tools server.
+# After this, drive it from the CLI (make run) or let Claude Code drive the MCP
+# server (.mcp.json → scripts/apts-mcp.sh). You still need a target (e.g. a
+# juice-shop container on the apts-lean network, or the proxy for an external one).
+up: db tools
+	@echo "backend up: Postgres :5432 + mcp-native :9000/mcp. Add a target, then run."
 
 down:
 	$(COMPOSE) down

@@ -461,6 +461,45 @@ async def resume_engagement(engagement_id: str) -> dict[str, Any]:
     return await get_control().resume_engagement(engagement_id)
 
 
+async def apts_health() -> dict[str, Any]:
+    """Check the harness backend before running: is the DB and the tools server up?
+
+    Call this first if another tool errors. It reports whether the storage DB and
+    the mcp-native tools container are reachable, so a backend that is not running
+    (`make up`) shows up as a clear status instead of an opaque tool failure.
+    """
+    out: dict[str, Any] = {"storage": (os.environ.get("APTS_STORAGE") or "postgres").lower()}
+    if out["storage"] == "postgres":
+        try:
+            from shared.db import get_conn
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            out["database"] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            out["database"] = f"unreachable: {type(exc).__name__}: {str(exc)[:120]}"
+    else:
+        out["database"] = "n/a (memory mode)"
+    url = os.environ.get("APTS_MCP_URL", "")
+    out["tools_url"] = url
+    if url:
+        try:
+            import httpx
+            r = httpx.get(url, timeout=5.0)
+            # Any HTTP status means the server answered — the /mcp endpoint returns
+            # 400/406 to a plain GET, so reachability (not the code) is the signal.
+            out["tools"] = f"reachable (HTTP {r.status_code})"
+        except Exception as exc:  # noqa: BLE001
+            out["tools"] = f"unreachable: {type(exc).__name__}: {str(exc)[:120]}"
+    else:
+        out["tools"] = "APTS_MCP_URL not set"
+    out["ready"] = (out["database"] in ("ok", "n/a (memory mode)")
+                    and str(out["tools"]).startswith("reachable"))
+    if not out["ready"]:
+        out["hint"] = "Backend not fully up. Run `make up` (starts Postgres + mcp-native)."
+    return out
+
+
 def _search_artifact(payload: dict, query: str, limit: int = 25) -> list[dict]:
     """Items from the artifact's list sections whose JSON contains ``query``."""
     q = query.lower()
@@ -483,6 +522,8 @@ def _search_artifact(payload: dict, query: str, limit: int = 25) -> list[dict]:
 
 # Core, storage-backed control tools defined in this module.
 CORE_TOOLS: dict[str, str] = {
+    "apts_health": ("Check the backend is up (storage DB + mcp-native tools server) "
+                    "before running. Call this first if another tool errors."),
     "create_engagement": ("Validate parameters, create the engagement, and start "
                           "the in-process pipeline (returns the engagement_id)."),
     "engagement_status": ("Report overall + per-stage status of an engagement, "
@@ -521,6 +562,7 @@ DB_TOOLS: dict[str, str] = {
 ALL_TOOL_NAMES: list[str] = list(CORE_TOOLS) + list(DB_TOOLS)
 
 _CORE_FNS: dict[str, Callable] = {
+    "apts_health": apts_health,
     "create_engagement": create_engagement,
     "engagement_status": engagement_status,
     "list_artifacts": list_artifacts,
@@ -581,8 +623,13 @@ def build_server(storage: Any = None, *, include_db_tools: bool = True,
 
 
 def serve(port: int | None = None, storage_kind: str | None = None, *,
-          include_db_tools: bool = True, host: str | None = None) -> None:
-    """Build and run the harness MCP control server (streamable-HTTP).
+          include_db_tools: bool = True, host: str | None = None,
+          transport: str = "http") -> None:
+    """Build and run the harness MCP control server.
+
+    ``transport="stdio"`` speaks MCP over stdin/stdout — the mode Claude Code (or
+    any MCP client that spawns a subprocess) uses. ``transport="http"`` (default)
+    serves streamable-HTTP on ``host:port``.
 
     Defaults to postgres (the real path for long, resumable runs); pass
     ``storage_kind="memory"`` or ``--storage memory`` for a quick ephemeral run.
@@ -600,6 +647,16 @@ def serve(port: int | None = None, storage_kind: str | None = None, *,
     global control
     control = HarnessControl(storage)
     server, registered = build_server(storage=storage, include_db_tools=include_db_tools)
+
+    if transport == "stdio":
+        # Claude Code (or any MCP client) spawns this process and speaks MCP over
+        # stdin/stdout. Logs already go to stderr (see main), so they never corrupt
+        # the protocol channel.
+        log.info("serving apts harness control MCP over stdio (storage=%s, tools=%d)",
+                 kind, len(registered))
+        server.run(transport="stdio")
+        return
+
     port = port or int(os.environ.get("APTS_CONTROL_MCP_PORT", "9100"))
     # Loopback by default: the control server drives real scans, so it must not be
     # reachable from the network unless the operator explicitly opts in with --host.
@@ -620,14 +677,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-db-tools", action="store_true",
                         help="register only the core control tools (skip the DB-backed query tools)")
     parser.add_argument("--host", default=None,
-                        help="bind address (default APTS_CONTROL_MCP_HOST or 127.0.0.1 — loopback; "
-                             "pass 0.0.0.0 to expose on all interfaces)")
+                        help="bind address for http transport (default APTS_CONTROL_MCP_HOST "
+                             "or 127.0.0.1 — loopback; pass 0.0.0.0 to expose on all interfaces)")
+    parser.add_argument("--transport", choices=["stdio", "http"], default="http",
+                        help="stdio = spawned by an MCP client (Claude Code); "
+                             "http = streamable-HTTP on host:port (default)")
     args = parser.parse_args(argv)
 
     import logging as _logging
-    _logging.basicConfig(level=_logging.INFO)
+    import sys as _sys
+    # Logs MUST go to stderr: on stdio transport, stdout is the MCP protocol channel.
+    _logging.basicConfig(level=_logging.INFO, stream=_sys.stderr)
     serve(port=args.port, storage_kind=args.storage,
-          include_db_tools=not args.no_db_tools, host=args.host)
+          include_db_tools=not args.no_db_tools, host=args.host, transport=args.transport)
     return 0
 
 
