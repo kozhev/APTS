@@ -56,14 +56,14 @@ RECENT_LIMIT = int(os.environ.get("APTS_COMPOSER_RECENT", "10"))
 
 STAGE_LABEL = {
     "recon": "Recon", "vuln": "Vulnerability Assessment", "mitre": "MITRE Mapping",
-    "exploit": "Exploitation", "script": "Attack Script Builder", "adviser": "Reporting",
+    "exploit": "Exploitation", "adviser": "Reporting",
 }
 
 SYSTEM_PROMPT = """\
 You are the APTS Orchestrator — the single conversational interface to an
 AI-agentic penetration-testing pipeline for web targets. The pipeline is
 Recon -> Vulnerability Assessment -> MITRE ATT&CK Mapping -> Exploitation ->
-Attack Script Builder -> Reporting. The user talks ONLY to you; you drive the
+Reporting. The user talks ONLY to you; you drive the
 agents through your tools and never ask the user to contact an agent directly.
 
 How to work:
@@ -136,7 +136,7 @@ GREETING = ("Hi — I'm the APTS orchestrator for authorised web pentests. "
             "  • Recon only — graded recon findings, no exploitation\n"
             "  • Single page — test just one page/route\n"
             "  • Full pentest — end to end: recon → vuln → MITRE map → exploit → "
-            "script → report\n"
+            "report\n"
             "Probe and Recon-only pause so you can look, then resume anytime. "
             "Just tell me the target URL + in-scope domain(s) and which of these "
             "you'd like (default is a full pentest).")

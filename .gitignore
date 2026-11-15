@@ -30,3 +30,8 @@ flow-*.md
 flow-*.json
 
 .sqlmap-dev/
+# default SQLMAP_DIR mount target for the lean stack (docker-compose.lean.yml)
+.sqlmap/
+
+# macOS
+.DS_Store

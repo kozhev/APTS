@@ -70,7 +70,6 @@ class AdviserWorker:
         register = load("vuln")
         attack_map = load("mitre")
         exploitation = load("exploit")
-        playbook_raw = ctx.upstream if "scripts" in ctx.upstream else load("script")
 
         weaknesses = register.get("weaknesses", [])
         attempts = {a["weakness_id"]: a for a in exploitation.get("attempts", [])}
@@ -109,7 +108,10 @@ class AdviserWorker:
             target_url=ctx.target_url,
             executive_summary=self._summarise(findings, narrative, coverage),
             findings=findings,
-            playbook=AttackPlaybook(**playbook_raw) if playbook_raw else AttackPlaybook(),
+            # The attack-script stage was removed from the pipeline; the report no
+            # longer ships a playbook. The field stays on EngagementReport (and the
+            # renderer tolerates an empty one) so nothing downstream breaks.
+            playbook=AttackPlaybook(),
             attack_coverage=self._coverage(mappings, {f.id for f in findings}),
             exploitation_confirmed=n_proven > 0,
             caveats=self._caveats(asset_map, register, exploitation,

@@ -1,0 +1,168 @@
+# =========================================================================
+#  APTS — LEAN stack for the single-process host Runner (ADDITIVE)
+#
+#  This file is NEW and does not touch docker-compose.yml. It brings up only
+#  the two containers the host Runner (`python -m apts.cli run ...`) needs:
+#
+#      mcp-native   the tools server (HTTP MCP on 127.0.0.1:9000/mcp)
+#      database     Postgres with the APTS schema (127.0.0.1:5432)
+#
+#  NOT included: the 6 agents, the orchestrator, the sandbox, the mTLS mesh,
+#  the nginx load balancer, or the juice-shop replicas. The Runner is a plain
+#  host Python process; it talks to these two containers over published,
+#  loopback-only ports.
+#
+#  Project is namespaced `apts-lean` with its own volume and container names,
+#  so it can coexist with the full docker-compose.yml stack.
+#
+#  Bring up:   make tools    # mcp-native
+#              make db        # database (schema auto-initialised on first boot)
+#  Tear down:  make down
+# =========================================================================
+name: apts-lean
+
+services:
+
+  # ---------------------------------------------------------------------
+  #  Database (Postgres) — same image/schema as the full stack.
+  #
+  #  SSL is ON because the Runner's DSN (shared/db.py) is hard-wired to
+  #  sslmode=verify-full. The host connects as host=localhost, which the
+  #  database.crt SAN (DNS:database, DNS:localhost) satisfies, verified
+  #  against certs/database.crt as the root (APTS_TRUST_BUNDLE).
+  #
+  #  The server cert/key are copied to a postgres-owned path at container
+  #  start (the image's entrypoint runs as root, then gosu-drops to the
+  #  postgres user), so the host key file's ownership/mode does NOT matter —
+  #  no `sudo chown 999 certs/database.key` is required. Client-cert auth is
+  #  not used (scram password only), so no ssl_ca_file is configured.
+  # ---------------------------------------------------------------------
+  database:
+    image: postgres:16-bookworm
+    container_name: apts-lean-database
+    hostname: database
+    restart: unless-stopped
+    networks: [ apts-lean-net ]
+    environment:
+      POSTGRES_DB: apts
+      POSTGRES_USER: apts
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    # Copy the mounted (host-owned) cert+key to a postgres-owned location
+    # with the strict mode Postgres requires, THEN hand off to the normal
+    # postgres entrypoint. Runs as root (image default) so the chown works.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        mkdir -p /etc/pg-certs
+        cp /certs-ro/database.crt /etc/pg-certs/server.crt
+        cp /certs-ro/database.key /etc/pg-certs/server.key
+        chown postgres:postgres /etc/pg-certs/server.crt /etc/pg-certs/server.key
+        chmod 600 /etc/pg-certs/server.key
+        chmod 644 /etc/pg-certs/server.crt
+        exec docker-entrypoint.sh "$$@"
+      - bash
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/etc/pg-certs/server.crt
+      - -c
+      - ssl_key_file=/etc/pg-certs/server.key
+      - -c
+      - listen_addresses=*
+    volumes:
+      - lean_db_data:/var/lib/postgresql/data
+      # Schema init — runs once, on a fresh data volume.
+      - ./bootstrap/init_db.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+      # Server cert + key, mounted read-only; copied to a postgres-owned path
+      # at startup (see entrypoint above).
+      - ./certs/database.crt:/certs-ro/database.crt:ro
+      - ./certs/database.key:/certs-ro/database.key:ro
+    secrets:
+      - db_password
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apts -d apts"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits: { memory: 512M, cpus: "1.0" }
+
+  # ---------------------------------------------------------------------
+  #  Native MCP tools server — reused build from mcp_native/Dockerfile.
+  #
+  #  Serves genuine MCP over streamable-HTTP at /mcp. The server performs NO
+  #  authentication of its own (see mcp_native/server.py) — the bearer token
+  #  mounted below is used ONLY by the sandbox_run tool to call the sandbox
+  #  container, which the lean stack does not run. So the host Runner reaches
+  #  it with a plain client at http://127.0.0.1:9000/mcp, no token, no mTLS.
+  #
+  #  It still needs the database for the get_recorded_request tool, so it
+  #  joins the same network as `database` (resolved by hostname `database`,
+  #  verify-full satisfied by the DNS:database SAN + the mounted trust bundle).
+  #  The network is a normal bridge (NOT internal), so the scanning tools can
+  #  reach an external, authorised target — point --target at the real URL,
+  #  or at the `proxy` service from docker-compose.yml (see CLAUDE.md).
+  # ---------------------------------------------------------------------
+  mcp-native:
+    build:
+      context: .
+      dockerfile: mcp_native/Dockerfile
+    image: apts-mcp-native:latest
+    container_name: apts-lean-mcp-native
+    hostname: mcp-native
+    restart: unless-stopped
+    networks: [ apts-lean-net ]
+    command: python -m mcp_native.server --http
+    environment:
+      APTS_SQLMAP_PATH: /opt/sqlmap/sqlmap.py
+      APTS_HACKTRICKS_DIR: /opt/hacktricks
+      APTS_ATTACK_DIR: /opt/attack
+    secrets:
+      - source: db_password
+        target: db_password
+      # mcp-native's own bearer token (only used by the sandbox_run tool).
+      - source: mcp_native_token
+        target: token
+    volumes:
+      # Trust bundle for the DB connection (get_recorded_request → verify-full).
+      - ./certs/trust-bundle.pem:/etc/apts/trust-bundle.pem:ro
+      - ./config:/etc/apts/config:ro
+      # The user's sqlmap checkout, read-only. Set SQLMAP_DIR to your checkout
+      # (e.g. SQLMAP_DIR=/path/to/sqlmap, or `make tools SQLMAP_DIR=...`).
+      # Defaults to the repo-relative ./.sqlmap, which does not exist by default
+      # — when it is not a real sqlmap checkout the sqlmap tool is simply
+      # unavailable; every other tool still works.
+      - ${SQLMAP_DIR:-./.sqlmap}:/opt/sqlmap:ro
+      # HackTricks + MITRE ATT&CK corpora used by the lookup/mapping tools.
+      - ./mcp_native/corpus/hacktricks:/opt/hacktricks:ro
+      - ./mcp_native/corpus/attack:/opt/attack:ro
+    ports:
+      - "127.0.0.1:9000:9000"
+    deploy:
+      resources:
+        limits: { memory: 4096M, cpus: "4.0" }
+
+
+# =========================================================================
+#  Volumes, network, secrets — all namespaced to the lean stack.
+# =========================================================================
+volumes:
+  lean_db_data: {}
+
+networks:
+  # A normal bridge (has a route off the host) so the tools can reach an
+  # external authorised target. Both services share it so the tools server
+  # resolves the DB by its `database` hostname.
+  apts-lean-net:
+    driver: bridge
+
+secrets:
+  db_password:      { file: ./tokens/db_password.txt }
+  mcp_native_token: { file: ./tokens/mcp-native.token }

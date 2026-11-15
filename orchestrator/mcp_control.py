@@ -174,7 +174,6 @@ async def apts_capabilities() -> dict[str, Any]:
             {"stage": "vuln", "does": "hypothesise concrete, testable weaknesses"},
             {"stage": "mitre", "does": "map each weakness to MITRE ATT&CK techniques"},
             {"stage": "exploit", "does": "prove or disprove each weakness on the live target"},
-            {"stage": "script", "does": "write and sandbox-test a PoC for each confirmed weakness"},
             {"stage": "adviser", "does": "produce the grouped, impact-ranked client report"},
         ],
         "required_to_start": {

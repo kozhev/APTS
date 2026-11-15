@@ -582,7 +582,7 @@ async def test_exploit_lc_proven_without_signal_is_model_judgment(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Newly-ported stages on LangGraph: mitre / script / recon / adviser
+# Newly-ported stages on LangGraph: mitre / recon / adviser
 # --------------------------------------------------------------------------- #
 
 async def test_all_stage_system_prompts_register():
@@ -591,11 +591,10 @@ async def test_all_stage_system_prompts_register():
     import agent.services.workers.vuln.vuln_worker     # noqa: F401
     import agent.services.workers.mitre.mitre_worker    # noqa: F401
     import agent.services.workers.exploit.exploit_worker  # noqa: F401
-    import agent.services.workers.script.script_worker   # noqa: F401
     import agent.services.workers.adviser.adviser_worker  # noqa: F401
     from shared import prompts
     for pid in ("recon.rank", "vuln.system", "mitre.system", "exploit.system",
-                "script.system", "adviser.system"):
+                "adviser.system"):
         assert prompts.get(pid).text  # a non-empty default is registered
 
 
@@ -641,7 +640,7 @@ async def test_mitre_worker_end_to_end(monkeypatch):
 async def test_mitre_falls_back_when_nothing_confirmed(monkeypatch):
     """A hallucinated technique the catalogue rejects is discarded, but the weakness
     gets the deterministic fallback (T1190) rather than failing the whole stage —
-    one model/format miss must not stall exploit/script/adviser (§5.4 floor)."""
+    one model/format miss must not stall exploit/adviser (§5.4 floor)."""
     from agent.services.workers.mitre import mitre_worker as M
     from agent.services.workers.base import WorkContext
     from shared.models import Scope
@@ -662,83 +661,6 @@ async def test_mitre_falls_back_when_nothing_confirmed(monkeypatch):
         directive="")
     result = await M.MitreWorker()(ctx)
     assert result["mappings"]["W-001"][0]["technique_id"] == "T1190"
-
-
-async def test_script_worker_ships_last_clean_source(monkeypatch):
-    """What ships is the exact source the sandbox last ran clean (on_call capture)."""
-    from agent.services.workers.script import script_worker as S
-    from agent.services.workers.base import WorkContext
-    from shared.models import Scope
-
-    src = "import requests\nprint(requests.get('http://t.test/').status_code)\n"
-    scripted = ScriptedModel(responses=[
-        AIMessage(content="", tool_calls=[{
-            "name": "sandbox_run",
-            "args": {"language": "python", "source": src}, "id": "c1"}]),
-        AIMessage(content="DONE: reproduces the SQLi || FIX: use parameterised queries"),
-    ])
-    monkeypatch.setattr(S, "build_chat_model", lambda *a, **k: scripted)
-    fake = FakeMcpClient(
-        [_Descriptor("sandbox_run", "run", {"type": "object", "properties": {
-            "language": {"type": "string"}, "source": {"type": "string"}}})],
-        {"sandbox_run": lambda a: {"ok": True, "exit_code": 0, "stdout": "200"}})
-    monkeypatch.setattr(S, "Client", lambda url: fake)
-
-    class _Results:
-        def load(self, eid, stage):
-            return {
-                "vuln": {"weaknesses": [{"id": "W-001", "title": "SQL injection",
-                                         "asset": "/login"}]},
-                "mitre": {"mappings": {"W-001": [{"technique_id": "T1190"}]}},
-            }.get(stage)
-
-    ctx = WorkContext(
-        engagement_id=uuid.uuid4(), target_url="http://t.test/",
-        scope=Scope(domains=["t.test"]),
-        upstream={"attempts": [{"weakness_id": "W-001", "confirmed": True,
-                                "detection": "sqlmap", "reason": "injectable"}]},
-        directive="")
-    result = await S.ScriptWorker(_Results())(ctx)
-    assert len(result["scripts"]) == 1
-    sc = result["scripts"][0]
-    assert sc["weakness_id"] == "W-001"
-    assert "requests.get" in sc["source"]
-    assert sc["technique_ids"] == ["T1190"]
-    assert sc["safety_checked"] is True
-
-
-async def test_script_worker_rejects_unsafe_source(monkeypatch):
-    """A sandbox-clean script that trips the safety denylist is discarded, not shipped."""
-    from agent.services.workers.script import script_worker as S
-    from agent.services.workers.base import WorkContext
-    from shared.models import Scope
-
-    unsafe = "import os\nos.system('rm -rf /')\n"
-    scripted = ScriptedModel(responses=[
-        AIMessage(content="", tool_calls=[{
-            "name": "sandbox_run",
-            "args": {"language": "python", "source": unsafe}, "id": "c1"}]),
-        AIMessage(content="DONE: proves it || FIX: patch"),
-    ])
-    monkeypatch.setattr(S, "build_chat_model", lambda *a, **k: scripted)
-    fake = FakeMcpClient(
-        [_Descriptor("sandbox_run", "run", {"type": "object", "properties": {
-            "language": {"type": "string"}, "source": {"type": "string"}}})],
-        {"sandbox_run": lambda a: {"ok": True, "stdout": "done"}})
-    monkeypatch.setattr(S, "Client", lambda url: fake)
-
-    class _Results:
-        def load(self, eid, stage):
-            return {"vuln": {"weaknesses": [{"id": "W-001", "title": "x", "asset": "/"}]},
-                    "mitre": {"mappings": {}}}.get(stage)
-
-    ctx = WorkContext(
-        engagement_id=uuid.uuid4(), target_url="http://t.test/",
-        scope=Scope(domains=["t.test"]),
-        upstream={"attempts": [{"weakness_id": "W-001", "confirmed": True}]}, directive="")
-    result = await S.ScriptWorker(_Results())(ctx)
-    assert result["scripts"] == []
-    assert result["rejected"] == 1
 
 
 async def test_recon_worker_triages_observed_requests(monkeypatch):

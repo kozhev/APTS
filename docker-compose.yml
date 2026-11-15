@@ -29,14 +29,14 @@ x-service-base: &service-base
 x-config-mount: &config-mount
   - ./config:/etc/apts/config:ro
 
-# LLM provider settings, shared by all six agents.
+# LLM provider settings, shared by all five agents.
 #
 # Non-secret only.  Values come from ./.env (see .env.example) with defaults
 # that work out of the box.  The API KEY is deliberately absent: it is a
 # file-mounted Docker secret like the DB password, so it never lands in an
 # environment variable and never shows up in `docker inspect`.
 x-llm-env: &llm-env
-  # The agentic loops (recon/vuln/mitre/exploit/script/adviser) all run on the
+  # The agentic loops (recon/vuln/mitre/exploit/adviser) all run on the
   # LangGraph engine (create_react_agent + a shared ChatOpenAI). The model
   # endpoint itself is set per service below via APTS_LOOP_LLM_URL / _MODEL /
   # _TIMEOUT; the bearer key is a file-mounted Docker secret, never an env var.
@@ -62,7 +62,7 @@ x-llm-env: &llm-env
   LANGFUSE_HOST:             ${LANGFUSE_HOST:-https://cloud.langfuse.com}
   APTS_LANGFUSE_DISABLED:    ${APTS_LANGFUSE_DISABLED:-0}
 
-# Shared resource limits for the six working agents.
+# Shared resource limits for the five working agents.
 x-agent-limits: &agent-limits
   deploy:
     resources:
@@ -157,7 +157,7 @@ services:
         limits: { memory: 256M, cpus: "0.5" }
 
   # ---------------------------------------------------------------------
-  #  Six working agents — same image, one command, different AGENT_NAME
+  #  Five working agents — same image, one command, different AGENT_NAME
   # ---------------------------------------------------------------------
   agent-recon:
     <<: [*service-base, *agent-limits]
@@ -301,36 +301,6 @@ services:
       - ./certs/trust-bundle.pem:/etc/apts/trust-bundle.pem:ro
       - ./config:/etc/apts/config:ro
 
-  agent-script:
-    <<: [*service-base, *agent-limits]
-    container_name: apts-agent-script
-    hostname: agent-script
-    depends_on:
-      database: { condition: service_healthy }
-    command: python -m agent.main
-    environment:
-      <<: *llm-env
-      AGENT_NAME: script
-      # The script worker runs the native-MCP PoC loop against mcp-native
-      # (sandbox_run), driving the hosted AWS model directly (agentic.chat).
-      APTS_MCP_URL:          ${APTS_MCP_URL:-http://mcp-native:9000/mcp}
-      APTS_LOOP_LLM_URL:     ${APTS_LOOP_LLM_URL:-https://bedrock-mantle.eu-north-1.api.aws/v1/chat/completions}
-      APTS_LOOP_LLM_MODEL:   ${APTS_LOOP_LLM_MODEL:-qwen.qwen3-coder-480b-a35b-instruct}
-      APTS_LOOP_LLM_TIMEOUT: ${APTS_LOOP_LLM_TIMEOUT:-150}
-    secrets:
-      - source: agent_script_token
-        target: token
-      - source: agent_script_key
-        target: tls.key
-      - source: db_password
-        target: db_password
-      - source: llm_api_key
-        target: llm_api_key
-    volumes:
-      - ./certs/agent-script.crt:/etc/apts/tls.crt:ro
-      - ./certs/trust-bundle.pem:/etc/apts/trust-bundle.pem:ro
-      - ./config:/etc/apts/config:ro
-
   agent-adviser:
     <<: [*service-base, *agent-limits]
     container_name: apts-agent-adviser
@@ -366,7 +336,7 @@ services:
   # ---------------------------------------------------------------------
   #  Local LLM server (optional — profile "localllm")
   #
-  #  A self-hosted llama.cpp server so the six agents can run entirely offline,
+  #  A self-hosted llama.cpp server so the five agents can run entirely offline,
   #  with no external API key and no per-call quota. Select it at the agent side
   #  by pointing APTS_LOOP_LLM_URL at this service on apts-net
   #  (http://llama:8080/v1/chat/completions). With no key mounted, build_chat_model
@@ -479,6 +449,48 @@ services:
         # Hosts up to CONCURRENCY concurrent sqlmap runs (one per in-flight proof),
         # so it needs real headroom at exploit concurrency 10.
         limits: { memory: 4096M, cpus: "4.0" }
+
+
+  # ---------------------------------------------------------------------
+  #  External-target proxy — a reverse proxy that IS the target
+  #
+  #  To scan a site OUTSIDE the lab you do not point the tools at the
+  #  internet; you point them at this container, exactly like juice-shop.
+  #  It reverse-proxies to the real site, so every scanner (http_request,
+  #  the crawler browser, sqlmap/ffuf/katana) targets http://proxy:8080/
+  #  and nothing in the pipeline needs to know a proxy exists.
+  #
+  #  Configure the upstream — the authorized site to scan — with
+  #  APTS_PROXY_UPSTREAM, then bring the service up:
+  #     APTS_PROXY_UPSTREAM=https://target.example.com \
+  #       docker compose up -d proxy
+  #  Run the engagement with target_url=http://proxy:8080/ and scope
+  #  domains=["proxy"]: every request stays on the in-scope `proxy` host,
+  #  so the allowlist needs no special case. mitmproxy originates TLS to
+  #  the upstream; --ssl-insecure tolerates a self-signed upstream cert.
+  #
+  #  It sits on apts-net (which has a route off the host), NOT the
+  #  internal apts-target, so this one box is the single controlled exit
+  #  to the internet. Only ever point it at a target you are authorized
+  #  to test. Swap `mitmdump` for `mitmweb` and publish 8081 to inspect
+  #  the captured traffic in a browser.
+  # ---------------------------------------------------------------------
+  proxy:
+    image: mitmproxy/mitmproxy:10.4.2
+    container_name: apts-proxy
+    hostname: proxy
+    restart: unless-stopped
+    networks: [ apts-net ]
+    command: >
+      mitmdump
+      --mode reverse:${APTS_PROXY_UPSTREAM:-https://example.com}
+      --listen-host 0.0.0.0 --listen-port 8080
+      --set keep_host_header=false
+      --set connection_strategy=lazy
+      --ssl-insecure
+      --flow-detail 1
+    # ports:
+    #   - "127.0.0.1:8081:8081"   # uncomment with `mitmweb` to browse traffic
 
 
   # ---------------------------------------------------------------------
@@ -628,7 +640,7 @@ networks:
 secrets:
   # DB password — mounted into the DB container AND every Python container
   db_password:            { file: ./tokens/db_password.txt }
-  # LLM provider API key — mounted into the six agent containers only.
+  # LLM provider API key — mounted into the five agent containers only.
   # Nothing else needs it: the orchestrator coordinates, mcp-tools runs tools,
   # and the sandbox executes commands. None of them call a model.
   llm_api_key:            { file: ./tokens/aws_llm.key }
@@ -639,7 +651,6 @@ secrets:
   agent_vuln_token:       { file: ./tokens/agent-vuln.token }
   agent_mitre_token:      { file: ./tokens/agent-mitre.token }
   agent_exploit_token:    { file: ./tokens/agent-exploit.token }
-  agent_script_token:     { file: ./tokens/agent-script.token }
   agent_adviser_token:    { file: ./tokens/agent-adviser.token }
   sandbox_token:          { file: ./tokens/sandbox.token }
   # TLS private keys (one per Python service)
@@ -648,6 +659,5 @@ secrets:
   agent_vuln_key:         { file: ./certs/agent-vuln.key }
   agent_mitre_key:        { file: ./certs/agent-mitre.key }
   agent_exploit_key:      { file: ./certs/agent-exploit.key }
-  agent_script_key:       { file: ./certs/agent-script.key }
   agent_adviser_key:      { file: ./certs/agent-adviser.key }
   sandbox_key:            { file: ./certs/sandbox.key }

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 # Stage order. Index position is execution order; the tuple is immutable so a
 # caller cannot reorder the pipeline at runtime.
-CHAIN: tuple[str, ...] = ("recon", "vuln", "mitre", "exploit", "script", "adviser")
+CHAIN: tuple[str, ...] = ("recon", "vuln", "mitre", "exploit", "adviser")
 
 # Critical = exhausting retries here stops the whole engagement (§2.2.4).
 #

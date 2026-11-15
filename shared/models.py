@@ -104,7 +104,7 @@ ProgressStatus = Literal["started", "in_progress", "done", "failed"]
 
 class ProgressUpdate(BaseModel):
     engagement_id: UUID
-    agent: str                     # 'recon', 'vuln', 'mitre', 'exploit', 'script', 'adviser'
+    agent: str                     # 'recon', 'vuln', 'mitre', 'exploit', 'adviser'
     status: ProgressStatus
     message: str = ""
     detail: dict[str, Any] = Field(default_factory=dict)

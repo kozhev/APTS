@@ -96,8 +96,6 @@ _STAGE_JOB = {
     "mitre": "Map each weakness to the MITRE ATT&CK technique(s) it corresponds to.",
     "exploit": "Prove or disprove each weakness against the live target using "
                "your tools; confirm only on a real tool signal.",
-    "script": "Write and sandbox-test a proof-of-concept script for each "
-              "confirmed weakness.",
     "adviser": "Produce the client report: group duplicates, keep only proven "
                "findings, and rank by impact.",
 }

@@ -1,7 +1,7 @@
 """Working agent service — composition root.
 
 One image, six containers. ``AGENT_NAME`` selects which stage this instance is
-(``recon``, ``vuln``, ``mitre``, ``exploit``, ``script``, ``adviser``).
+(``recon``, ``vuln``, ``mitre``, ``exploit``, ``adviser``).
 
 Layering — each layer calls only the one below it::
 
@@ -67,7 +67,6 @@ from agent.services.workers.base import Worker
 from agent.services.workers.exploit import ExploitWorker
 from agent.services.workers.mitre import MitreWorker
 from agent.services.workers.recon import ReconWorker
-from agent.services.workers.script import ScriptWorker
 from agent.services.workers.vuln import VulnWorker
 
 logging_config.configure(COMPONENT)
@@ -78,7 +77,7 @@ log = logging.getLogger(COMPONENT)
 # There is no longer a canned-stub fallback — all six stages are implemented, and
 # a silent stub standing in for a missing worker would report a stage as "done"
 # having produced a fabricated artifact.
-LLM_BACKED = {"vuln", "mitre", "exploit", "script", "adviser"}
+LLM_BACKED = {"vuln", "mitre", "exploit", "adviser"}
 
 # Stages that do real work through MCP tools but need no model to decide "what
 # exists". Recon belongs here on purpose: "what URLs exist" is a question a
@@ -93,8 +92,8 @@ def build_worker(results: AgentResultRepository) -> Worker:
 
     Every worker drives the agentic loop itself — a LangGraph ``create_react_agent``
     over a ``shared.llm`` chat model and the native MCP tools — so there is no
-    long-lived client for this composition root to open or close. The exploit,
-    script, and adviser workers take the result store because they read an earlier
+    long-lived client for this composition root to open or close. The exploit
+    and adviser workers take the result store because they read an earlier
     stage's artifact back.
     """
     if AGENT_NAME in TOOL_BACKED:
@@ -115,8 +114,6 @@ def build_worker(results: AgentResultRepository) -> Worker:
         # Also reads the register from the store — MITRE sits between this
         # stage and the artifact it needs.
         return ExploitWorker(results)
-    if AGENT_NAME == "script":
-        return ScriptWorker(results)
     if AGENT_NAME == "adviser":
         # Reads every stage's artifact and writes the deliverable to disk.
         return AdviserWorker(results, ReportRepository())
