@@ -81,14 +81,12 @@ it recognize when a hypothesis simply doesn't hold.
 
 ```mermaid
 flowchart TD
-    H["hypothesis + its origin request"] --> A["agent: reason,<br/>pick the next tool call"]
-    A --> G{"repeat guard:<br/>exact call already tried?"}
-    G -->|"no"| M["MCP tool call"]
-    G -->|"yes"| C["hints + guidance:<br/>nudge to change approach,<br/>summarize what's been tried"]
-    M --> C
-    C --> A
-    A -->|"proven"| P["record the proof (evidence + loot)"]
-    A -->|"doesn't hold"| N["tested, not confirmed"]
+    START["hypothesis + its origin request"] --> AGENT["agent reasons on<br/>the results so far"]
+    AGENT --> STOP{"stop guard:<br/>proven, or out of moves?"}
+    STOP -->|"yes"| DONE["record the verdict:<br/>proven / not confirmed"]
+    STOP -->|"no"| CALL["MCP tool call<br/>(repeat guard skips exact repeats)"]
+    CALL --> SUM["read the result, summarize<br/>what's been tried → hints back"]
+    SUM --> AGENT
 ```
 
 ### 6. Script & sandbox — proof-of-concept, safely
