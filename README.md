@@ -74,22 +74,21 @@ agent's tool calls:
 - **coaching** — each tool result comes back with an observation summarizing what's
   been tried, so the agent builds on it instead of circling;
 - **a repeat guard** — an exact repeat of a call short-circuits with a nudge to
-  change approach rather than re-running the same thing;
-- **session injection** — the engagement's credentials are attached to in-scope
-  calls automatically, so a proof runs authenticated without the agent juggling the
-  token;
-- **target resilience** — a flaky target that drops a connection mid-proof is
-  retried, so a crash isn't mistaken for a dead end.
+  change approach rather than re-running the same thing.
 
 That guidance is what makes the agent converge on a working exploit — and what lets
 it recognize when a hypothesis simply doesn't hold.
 
 ```mermaid
 flowchart TD
-    W["hypothesis + its origin request"] --> L{"exploit agent loop<br/>(attack · read · adjust)"}
-    L -->|"guided by coaching, the repeat guard,<br/>session injection &amp; retries"| L
-    L -->|"proven"| P["record the proof (evidence + loot)"]
-    L -->|"doesn't hold"| N["tested, not confirmed"]
+    H["hypothesis + its origin request"] --> A["agent: reason,<br/>pick the next tool call"]
+    A --> G{"repeat guard:<br/>exact call already tried?"}
+    G -->|"no"| M["MCP tool call"]
+    G -->|"yes"| C["hints + guidance:<br/>nudge to change approach,<br/>summarize what's been tried"]
+    M --> C
+    C --> A
+    A -->|"proven"| P["record the proof (evidence + loot)"]
+    A -->|"doesn't hold"| N["tested, not confirmed"]
 ```
 
 ### 6. Script & sandbox — proof-of-concept, safely
