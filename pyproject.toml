@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apts"
+version = "0.1.0"
+description = "APTS — agentic web-app pentest system: single-process host Runner for the lean stack."
+readme = "README.md"
+requires-python = ">=3.11"
+
+# Pinned host-Runner dependencies. Copied verbatim from requirements-runner.txt
+# (which is itself derived from requirements.txt). This is ONLY what the host
+# process `apts run ...` needs — the scanners, browser and crawler live in the
+# mcp-native container and are NOT installed here.
+dependencies = [
+    # Web/ASGI primitives pulled in transitively via shared.auth (FastAPI deps).
+    "fastapi==0.115.5",
+    "uvicorn[standard]==0.32.1",
+    # HTTP + data model + Postgres driver.
+    "httpx==0.27.2",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.6.1",
+    "psycopg[binary]==3.2.3",
+    # Native MCP client — the agentic loops drive the mcp-native tools server.
+    "mcp==2.1.0",
+    # LangChain / LangGraph engine for the agentic loops.
+    "langchain==0.3.30",
+    "langchain-core==0.3.86",
+    "langchain-openai==0.3.35",
+    "langgraph==0.3.34",
+    # Optional observability (active only when LANGFUSE_* keys are set).
+    "langfuse==4.15.6",
+]
+
+[project.optional-dependencies]
+# Test-only dependencies (from requirements-dev.txt): pip install -e ".[dev]"
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.0",
+]
+
+[project.scripts]
+# `apts run --target <url> --scope <domain>` after `pip install -e .`
+apts = "apts.cli:main"
+
+# -------------------------------------------------------------------------
+# Packaging layout. This is a FLAT multi-package repo (apts/, agent/, shared/,
+# orchestrator/, mcp_native/, …), so setuptools auto-discovery would error with
+# "multiple top-level packages". Configure it explicitly: package only the host
+# tool `apts` and the packages it imports (agent.services.workers.*,
+# agent.repositories.*, shared.*, orchestrator.mcp_control). mcp_native runs
+# only inside the tools container and is excluded, as are sandbox/tests/tools.
+# -------------------------------------------------------------------------
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["apts*", "agent*", "shared*", "orchestrator*"]
+exclude = ["mcp_native*", "sandbox*", "tests*", "tools*", "bootstrap*", "config*", "database*", "docs*", "reports*"]

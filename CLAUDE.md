@@ -13,11 +13,12 @@ the full `docker-compose.yml` still exists.
 - `tokens/db_password.txt` and `certs/` are generated automatically by `make` on first use
   (`bootstrap/generate_password.sh`, `bootstrap/generate_certs.sh`). `certs/database.key` is
   gitignored, so a fresh checkout regenerates it — this is why DB mode runs `make certs` first.
-- **sqlmap** checkout for SQL-injection proofs. Set `SQLMAP_DIR` to your sqlmap
-  checkout — e.g. `make tools SQLMAP_DIR=/path/to/sqlmap`. It defaults to the
-  repo-relative `./.sqlmap`, which does not exist by default: if `SQLMAP_DIR`
-  does not point at a real sqlmap checkout the sqlmap tool is simply unavailable,
-  and every other tool still works.
+- **sqlmap** for SQL-injection proofs is **bundled in the mcp-native image**
+  (shallow clone, baked by `mcp_native/Dockerfile` at `/opt/sqlmap/sqlmap.py`).
+  No `SQLMAP_DIR` and no host checkout are needed — `make tools` builds it in.
+  Rebuild the image (`make tools` after a `docker compose build`, or
+  `docker compose -f docker-compose.lean.yml build mcp-native`) to pick up a
+  new sqlmap pin.
 
 ## Install the host deps
 ```bash

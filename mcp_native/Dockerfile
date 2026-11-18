@@ -43,6 +43,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
  && apt-get purge -y --auto-remove git && rm -rf /var/lib/apt/lists/* \
  && ls /opt/seclists/Discovery/Web-Content/common.txt && echo "seclists OK"
 
+# sqlmap — the SQL-injection proof engine. Baked into the image (shallow clone
+# of a pinned release tag) so teammates need zero host tool setup; the server
+# invokes it at APTS_SQLMAP_PATH=/opt/sqlmap/sqlmap.py (set in compose).
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+ && git clone --depth 1 --branch 1.8 \
+      https://github.com/sqlmapproject/sqlmap.git /opt/sqlmap \
+ && apt-get purge -y --auto-remove git && rm -rf /var/lib/apt/lists/* \
+ && python /opt/sqlmap/sqlmap.py --version && echo "sqlmap OK"
+
 # shared.db (recon lookup) and the mcp_native package (which now carries its own
 # browser crawler under mcp_native/crawler/ — no longer the retired mcp_tools).
 COPY shared/     /app/shared/

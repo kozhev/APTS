@@ -35,3 +35,8 @@ flow-*.json
 
 # macOS
 .DS_Store
+
+# python packaging build artifacts
+*.egg-info/
+build/
+dist/

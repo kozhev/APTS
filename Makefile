@@ -16,21 +16,16 @@
 #      make run TARGET=http://127.0.0.1:3000 SCOPE=127.0.0.1
 # =========================================================================
 
-# Interpreter used for the host Runner process (override: make run PYTHON=python3.11)
-PYTHON    ?= python3
+# Interpreter used for the host Runner process. Defaults to the project venv
+# (created by `make setup` / scripts/setup.sh) when present, else system python3.
+# Override: make run PYTHON=python3.11
+PYTHON    ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
 # LLM endpoint — defaults match docker-compose.yml. Override on the command line.
 LLM_URL   ?= https://bedrock-mantle.eu-north-1.api.aws/v1/chat/completions
 LLM_MODEL ?= qwen.qwen3-coder-480b-a35b-instruct
 
 COMPOSE   := docker compose -f docker-compose.lean.yml
-
-# Path to your sqlmap checkout, mounted read-only into mcp-native. Defaults to
-# the repo-relative ./.sqlmap (absent by default → sqlmap tool unavailable).
-# Override: make tools SQLMAP_DIR=/path/to/sqlmap
-SQLMAP_DIR ?= ./.sqlmap
-# Exported so `docker compose` (in the tools target) picks it up from the env.
-export SQLMAP_DIR
 
 # Engagement parameters (make vars).
 TARGET    ?=
@@ -81,7 +76,7 @@ LANGFUSE_SRC = [ -f tokens/langfuse.env ] && . ./tokens/langfuse.env;
 
 help:
 	@echo "APTS easy-run targets:"
-	@echo "  make setup                         install host Runner deps (requirements-runner.txt)"
+	@echo "  make setup                         host setup: .venv + editable install + certs (scripts/setup.sh)"
 	@echo "  make db                            start Postgres (127.0.0.1:5432), schema auto-init"
 	@echo "  make tools                         start mcp-native tools server (127.0.0.1:9000/mcp)"
 	@echo "  make run     TARGET=.. SCOPE=..    run an engagement in Postgres mode"
@@ -91,11 +86,12 @@ help:
 	@echo "  make down                          stop the lean stack"
 	@echo "  make logs                          tail the lean stack logs"
 	@echo ""
-	@echo "Vars: TARGET= SCOPE= [OBJECTIVE=] [RESUME=] [PORT=] [LLM_URL=] [LLM_MODEL=] [SQLMAP_DIR=]"
+	@echo "Vars: TARGET= SCOPE= [OBJECTIVE=] [RESUME=] [PORT=] [LLM_URL=] [LLM_MODEL=]"
 
 # --- host dependencies ---------------------------------------------------
+# One-command host setup: Docker/Python checks, .venv, editable install, certs.
 setup:
-	$(PYTHON) -m pip install -r requirements-runner.txt
+	bash scripts/setup.sh
 
 # --- one-time secrets/certs (idempotent) ---------------------------------
 # generate_password.sh and generate_certs.sh are both no-ops if their output

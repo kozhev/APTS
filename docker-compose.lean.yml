@@ -134,12 +134,10 @@ services:
       # Trust bundle for the DB connection (get_recorded_request → verify-full).
       - ./certs/trust-bundle.pem:/etc/apts/trust-bundle.pem:ro
       - ./config:/etc/apts/config:ro
-      # The user's sqlmap checkout, read-only. Set SQLMAP_DIR to your checkout
-      # (e.g. SQLMAP_DIR=/path/to/sqlmap, or `make tools SQLMAP_DIR=...`).
-      # Defaults to the repo-relative ./.sqlmap, which does not exist by default
-      # — when it is not a real sqlmap checkout the sqlmap tool is simply
-      # unavailable; every other tool still works.
-      - ${SQLMAP_DIR:-./.sqlmap}:/opt/sqlmap:ro
+      # sqlmap is baked into the mcp-native image (see mcp_native/Dockerfile),
+      # at APTS_SQLMAP_PATH=/opt/sqlmap/sqlmap.py — no host checkout or mount
+      # needed. Rebuild the image (`make tools` / docker compose build) to pick
+      # up a new sqlmap pin.
       # HackTricks + MITRE ATT&CK corpora used by the lookup/mapping tools.
       - ./mcp_native/corpus/hacktricks:/opt/hacktricks:ro
       - ./mcp_native/corpus/attack:/opt/attack:ro
