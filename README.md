@@ -86,10 +86,19 @@ it recognize when a hypothesis simply doesn't hold.
 
 ```mermaid
 flowchart TD
-    W["each hypothesis<br/>+ its origin request"] --> L{"exploit agent loop"}
-    L -->|"attack, read the result,<br/>follow the loop's guidance,<br/>take the next move"| L
-    L -->|"proven"| P["record the proof<br/>(evidence + loot)"]
-    L -->|"doesn't hold"| N["record: tested,<br/>not confirmed"]
+    W["hypothesis + its origin request"] --> R["agent reasons,<br/>picks the next move"]
+    R --> G{"repeat-call guard:<br/>exact call seen before?"}
+    G -->|"yes — short-circuit"| NUDGE["nudge: change the args<br/>or conclude"]
+    NUDGE --> R
+    G -->|"no"| INJ["attach the engagement<br/>session to in-scope calls"]
+    INJ --> C["run the tool (MCP call)"]
+    C --> T{"target dropped<br/>the connection?"}
+    T -->|"retry the same call"| C
+    T -->|"result"| O["capture evidence,<br/>feed back coaching<br/>(what's been tried so far)"]
+    O --> D{"agent decides"}
+    D -->|"keep attacking<br/>(within the step budget)"| R
+    D -->|"it works"| P["record the proof<br/>(evidence + loot)"]
+    D -->|"doesn't hold"| N["tested, not confirmed"]
 ```
 
 ### 6. Script & sandbox — proof-of-concept, safely
