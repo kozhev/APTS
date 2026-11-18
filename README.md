@@ -38,18 +38,10 @@ graded leads worth testing.
 
 ```mermaid
 flowchart LR
-    P["probe → AssetMap<br/>(routes, inputs, API requests)"] --> R{"recon agent:<br/>what's worth testing?"}
-    R -->|"interactive page"| C["crawl_v2<br/>(capture the real request)"]
-    R -->|"unlinked paths / IDs"| F["ffuf"]
-    R -->|"hidden params"| A["arjun"]
-    R -->|"breadth / JS endpoints"| K["katana"]
-    R -->|"confirm a route"| H["http_request"]
-    C --> R
-    F --> R
-    A --> R
-    K --> R
-    H --> R
-    R -->|"surface covered"| FIN["summarize → findings"]
+    A["AssetMap<br/>(from probe)"] --> L{"recon agent loop"}
+    L -->|"decide what's worth exploring,<br/>run a discovery tool, read the result"| L
+    L -->|"security-relevant<br/>surface covered"| S["summarize &amp; grade<br/>the surface"]
+    S --> F["findings"]
 ```
 
 ### 3. Vuln — hypothesis matching (RAG)
@@ -94,16 +86,10 @@ it recognize when a hypothesis simply doesn't hold.
 
 ```mermaid
 flowchart TD
-    S["for each hypothesis<br/>+ its origin request"] --> T{"exploit agent:<br/>pick a tool"}
-    T -->|"craft a request"| H["http_request"]
-    T -->|"SQL injection"| Q["sqlmap"]
-    T -->|"XSS in a real browser"| X["xss_prove"]
-    H --> G["read result + guidance<br/>(coaching · repeat guard ·<br/>session injection · retries)"]
-    Q --> G
-    X --> G
-    G -->|"not there yet"| T
-    G -->|"exploited / proven"| OK["record attempt + evidence + loot"]
-    G -->|"doesn't hold"| NO["record: tested, not confirmed"]
+    W["each hypothesis<br/>+ its origin request"] --> L{"exploit agent loop"}
+    L -->|"attack, read the result,<br/>follow the loop's guidance,<br/>take the next move"| L
+    L -->|"proven"| P["record the proof<br/>(evidence + loot)"]
+    L -->|"doesn't hold"| N["record: tested,<br/>not confirmed"]
 ```
 
 ### 6. Script & sandbox — proof-of-concept, safely
