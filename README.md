@@ -89,13 +89,7 @@ flowchart TD
     SUM --> AGENT
 ```
 
-### 6. Script & sandbox — proof-of-concept, safely
-For a proven vulnerability, APTS can produce a proof-of-concept script and run it
-inside a **hardened sandbox** (`sandbox_run`) — an isolated execution environment
-that keeps untrusted, attack-shaped code away from your host. PoC code runs
-contained, never on your machine.
-
-### 7. Reporting
+### 6. Reporting
 The **reporting agent** reasons over everything the run produced — it needs no
 external tools — and compiles the proven findings into a client-facing report: it
 groups related findings, ranks them by severity and impact, attaches the evidence
@@ -109,9 +103,9 @@ writes remediation guidance.
 - **Agents over tools.** Each stage is an agentic loop over an LLM: the agent
   thinks, calls a tool, reads the result, and decides the next move.
 - **Tools over MCP.** The security tooling — crawlers, `ffuf`, `arjun`, `katana`,
-  `sqlmap`, `xss_prove`, the HackTricks knowledge base, the ATT&CK catalogue, the
-  sandbox — lives behind a native **Model Context Protocol (MCP)** server, so the
-  agents are decoupled from the tools they drive.
+  `sqlmap`, `xss_prove`, the HackTricks knowledge base, the ATT&CK catalogue —
+  lives behind a native **Model Context Protocol (MCP)** server, so the agents are
+  decoupled from the tools they drive.
 - **Structured artifacts.** Stages pass typed artifacts (AssetMap → findings →
   hypotheses → proofs → report), so results stay machine-readable the whole way.
 - **Two ways to run it.** As a single-process pipeline (the `apts` runner), or
@@ -151,7 +145,7 @@ you. See [CLAUDE.md](CLAUDE.md) for the full flow.
 |------|--------------|
 | `apts/` | The runner and entry points — the single-process pipeline + the MCP control server |
 | `agent/services/workers/` | The stage agents (recon, vuln, mitre, exploit, reporting) |
-| `mcp_native/` | The MCP tools server (crawlers, ffuf, arjun, katana, sqlmap, xss, knowledge base, ATT&CK, sandbox) |
+| `mcp_native/` | The MCP tools server (crawlers, ffuf, arjun, katana, sqlmap, xss, knowledge base, ATT&CK) |
 | `shared/` | Shared core — pipeline definition, data models, LLM client, scope rules |
 | `.claude/` | Claude Code subagents and the pentest skill |
 | `docker-compose.lean.yml` | The lean stack: tools server + database |
@@ -162,5 +156,5 @@ you. See [CLAUDE.md](CLAUDE.md) for the full flow.
 ## Safety & scope
 
 APTS is for **authorized** testing only. Every outbound request is scope-checked,
-credentials only ever reach in-scope hosts, and proof-of-concept code runs in the
-sandbox. Only ever point it at a target you have permission to assess.
+and credentials only ever reach in-scope hosts. Only ever point it at a target you
+have permission to assess.

@@ -7,7 +7,7 @@
 #      mcp-native   the tools server (HTTP MCP on 127.0.0.1:9000/mcp)
 #      database     Postgres with the APTS schema (127.0.0.1:5432)
 #
-#  NOT included: the 6 agents, the orchestrator, the sandbox, the mTLS mesh,
+#  NOT included: the 6 agents, the orchestrator, the mTLS mesh,
 #  the nginx load balancer, or the juice-shop replicas. The Runner is a plain
 #  host Python process; it talks to these two containers over published,
 #  loopback-only ports.
@@ -98,10 +98,8 @@ services:
   #  Native MCP tools server — reused build from mcp_native/Dockerfile.
   #
   #  Serves genuine MCP over streamable-HTTP at /mcp. The server performs NO
-  #  authentication of its own (see mcp_native/server.py) — the bearer token
-  #  mounted below is used ONLY by the sandbox_run tool to call the sandbox
-  #  container, which the lean stack does not run. So the host Runner reaches
-  #  it with a plain client at http://127.0.0.1:9000/mcp, no token, no mTLS.
+  #  authentication of its own (see mcp_native/server.py). So the host Runner
+  #  reaches it with a plain client at http://127.0.0.1:9000/mcp, no token, no mTLS.
   #
   #  It still needs the database for the get_recorded_request tool, so it
   #  joins the same network as `database` (resolved by hostname `database`,
@@ -127,9 +125,6 @@ services:
     secrets:
       - source: db_password
         target: db_password
-      # mcp-native's own bearer token (only used by the sandbox_run tool).
-      - source: mcp_native_token
-        target: token
     volumes:
       # Trust bundle for the DB connection (get_recorded_request → verify-full).
       - ./certs/trust-bundle.pem:/etc/apts/trust-bundle.pem:ro
@@ -163,4 +158,3 @@ networks:
 
 secrets:
   db_password:      { file: ./tokens/db_password.txt }
-  mcp_native_token: { file: ./tokens/mcp-native.token }

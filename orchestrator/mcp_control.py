@@ -24,37 +24,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any
-from uuid import UUID, uuid4
-
-import httpx
-import psycopg
-
-from mcp.server.mcpserver import MCPServer
+from uuid import UUID
 
 from shared import pipeline, trace
-from shared.auth import bearer_headers, load_own_token
 from shared.db import audit, get_conn
-from shared.models import ChainHandoff, EngagementSpec, Scope, TimeWindow
-from shared.tls import client_ssl_context
-
-from orchestrator.guardrails_entry import (
-    GuardrailsEntryBlocked,
-    check_engagement_spec,
-)
 
 log = logging.getLogger("orchestrator.mcp_control")
 
 CHAIN = list(pipeline.CHAIN)
 ARTIFACT_CHARS = 8000  # cap a returned artifact so it never floods the chat model
-
-control = MCPServer(
-    name="apts-orchestrator-control",
-    instructions=("Control APTS engagements: describe capabilities, create an "
-                  "engagement, check status, stop it, and read agent artifacts. "
-                  "The user never talks to an agent directly — only through here."),
-)
 
 
 # --------------------------------------------------------------------------- #
@@ -83,48 +62,6 @@ def _ensure_schema() -> None:
                         "credentials JSONB NOT NULL DEFAULT '{}'")
     except Exception as exc:  # noqa: BLE001 — never block startup on a migration
         log.warning("schema migration (engagements columns) skipped: %s", exc)
-
-
-def _recon_directive(objective: str = "", categories: list[str] | None = None) -> str:
-    """The first-stage directive, optionally shaped by the operator's brief.
-
-    Generic by construction: the operator's ``objective`` is injected verbatim as
-    steering, never interpreted here — no assumption about what it says. It biases
-    triage, it does not narrow scope (the Scope still bounds what is touched).
-    Mirrored in ``orchestrator.main`` for the CLI path."""
-    directive = ("Map the attack surface of the target: crawl it, record every "
-                 "in-scope request, and triage which are worth testing.")
-    objective = (objective or "").strip()
-    if objective:
-        directive += (f" Operator objective for this engagement: {objective} "
-                      "Let it steer what you prioritise; rank surface outside it lower.")
-    if categories:
-        directive += " Emphasise these test categories: " + ", ".join(categories) + "."
-    return directive
-
-
-def _create_engagement_row(engagement_id: UUID, spec: EngagementSpec) -> None:
-    """Insert the engagement and seed one pending row per stage.
-
-    Mirrors ``orchestrator.main._create_engagement_row`` on purpose (see module
-    docstring); kept in lockstep by both using ``shared.pipeline.CHAIN``."""
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO engagements
-                   (id, target_url, scope, time_window, objective, credentials, status)
-               VALUES (%s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, 'running')""",
-            (str(engagement_id), spec.target_url,
-             psycopg.types.json.Json(spec.scope.model_dump()),
-             psycopg.types.json.Json(spec.time_window.model_dump()
-                                     if spec.time_window else {}),
-             spec.objective, psycopg.types.json.Json(spec.credentials or {})),
-        )
-        for agent in CHAIN:
-            cur.execute(
-                """INSERT INTO engagement_state (engagement_id, agent, status)
-                   VALUES (%s, %s, 'pending')""",
-                (str(engagement_id), agent),
-            )
 
 
 def _status(engagement_id: UUID) -> dict[str, Any] | None:
@@ -229,129 +166,6 @@ async def apts_capabilities() -> dict[str, Any]:
                     "get_recon_summary", "get_recon_findings", "get_recon_peek",
                     "get_probe_summary", "get_report", "search_run"],
     }
-
-
-async def create_engagement(
-    target_url: str,
-    domains: list[str],
-    allow_paths: list[str] | None = None,
-    deny_paths: list[str] | None = None,
-    objective: str | None = None,
-    token: str | None = None,
-    credentials: dict[str, Any] | None = None,
-    scan_mode: str = "default",
-    stop_after: str = "",
-) -> dict[str, Any]:
-    """Validate the parameters, create the engagement, and start the pipeline.
-
-    Only call this once you have a target_url and at least one in-scope domain
-    that covers the target host. Returns the new engagement_id, or an "error"
-    explaining what the entry guardrails rejected so you can ask the user to fix
-    it.
-
-    Args:
-        target_url: Target base URL, e.g. "http://app.example.com/".
-        domains: In-scope hosts; must cover the target host.
-        allow_paths: Optional path-prefix allowlist.
-        deny_paths: Optional path-prefix denylist.
-        objective: Optional free-text engagement brief from the user — whatever they
-            want the run to concentrate on, ignore, or do differently (including which
-            vuln classes to emphasise). It is folded into the directive composed for
-            EVERY stage, so it steers the whole pipeline. Advisory: it re-prioritises,
-            it does not narrow scope (use allow_paths/deny_paths for a hard boundary).
-            Pass the user's intent as they phrased it; do not invent one.
-        token: Optional access/bearer token for an authenticated run — pass the
-            token the user gives you and it is sent, to in-scope hosts only, both as
-            an "Authorization: Bearer <token>" header and a "token" cookie (so the
-            crawl authenticates whichever way the app expects). A convenience over
-            building `credentials` by hand; if you need finer control (custom header
-            name, several cookies, basic auth) use `credentials` instead.
-        credentials: Optional auth for an authenticated crawl — {"headers": {...},
-            "cookies": [...], "basic_auth": {...}}. Sent only to in-scope hosts.
-        scan_mode: How much of the app recon maps. "default" = shallow full crawl
-            (katana depth 1 + SPA seed) — the normal run. "thorough" = deepest
-            (katana depth 2), slower, more endpoints. "page" = crawl ONLY the one
-            route given as target_url (fastest, ~30s) — for page mode, pass the page
-            itself as target_url, e.g. "http://host/#/login". Only affects recon.
-        stop_after: Where to PAUSE the pipeline so the user can inspect before more
-            runs. "" = run the whole pipeline (default). "probe" = map the surface only
-            (katana + crawl + peek, NO findings) then pause — for "just probe the site".
-            "recon" = run full recon (graded findings) then pause, before vuln/exploit —
-            for "crawl and show me the recon findings". A paused run is continued with
-            resume_engagement. Inspect a paused run with get_recon_summary / _peek /
-            _findings / get_probe_summary.
-    """
-    scan_mode = (scan_mode or "default").strip().lower()
-    if scan_mode not in ("default", "thorough", "page"):
-        return {"error": f"scan_mode must be default|thorough|page, got {scan_mode!r}"}
-    stop_after = (stop_after or "").strip().lower()
-    if stop_after not in ("", "probe", "recon"):
-        return {"error": f"stop_after must be ''|probe|recon, got {stop_after!r}"}
-    time_window = None
-    creds: dict[str, Any] = dict(credentials or {})
-    if token:
-        token = token.strip()
-        # Mirror the CLI --token convenience: send it as a header AND a cookie so an
-        # authenticated crawl works whichever the app reads. Merge, don't clobber
-        # anything the caller already put in `credentials`.
-        headers = dict(creds.get("headers") or {})
-        headers.setdefault("Authorization", f"Bearer {token}")
-        cookies = list(creds.get("cookies") or [])
-        if not any((c or {}).get("name") == "token" for c in cookies):
-            cookies.append({"name": "token", "value": token})
-        creds["headers"] = headers
-        creds["cookies"] = cookies
-    spec = EngagementSpec(
-        target_url=target_url,
-        scope=Scope(domains=domains or [], allow_paths=allow_paths or [],
-                    deny_paths=deny_paths or []),
-        time_window=time_window, objective=(objective or "").strip(),
-        credentials=creds, scan_mode=scan_mode)
-
-    try:
-        spec = check_engagement_spec(spec)
-    except GuardrailsEntryBlocked as exc:
-        audit("orchestrator", "entry_rejected", detail={"reason": str(exc)})
-        return {"error": f"guardrails rejected the engagement: {exc}"}
-
-    engagement_id = uuid4()
-    _create_engagement_row(engagement_id, spec)
-    audit("orchestrator", "engagement_created",
-          engagement_id=str(engagement_id), detail={"target_url": spec.target_url})
-    trace.record_for(engagement_id, "orchestrator", "engagement_requested", {
-        "target_url": spec.target_url,
-        "scope": spec.scope.model_dump(mode="json"),
-        "objective": spec.objective,
-        "chain": CHAIN, "scan_mode": scan_mode, "stop_after": stop_after})
-
-    directive = _recon_directive(spec.objective)
-    handoff = ChainHandoff(
-        engagement_id=engagement_id, from_component="orchestrator",
-        target_url=spec.target_url, scope=spec.scope,
-        time_window=spec.time_window, results={}, directive=directive,
-        stop_after=stop_after,
-        credentials=spec.credentials, scan_mode=scan_mode)
-
-    try:
-        token = load_own_token()
-        async with httpx.AsyncClient(
-                verify=client_ssl_context(),
-                timeout=httpx.Timeout(30.0, connect=5.0)) as client:
-            resp = await client.post(
-                "https://agent-recon:8443/run",
-                content=handoff.model_dump_json(),
-                headers=bearer_headers(token))
-            resp.raise_for_status()
-    except Exception as exc:  # noqa: BLE001 — surface the kickoff failure to the user
-        trace.record_for(engagement_id, "orchestrator", "kickoff_failed",
-                         {"agent": "recon", "error": str(exc)})
-        return {"engagement_id": str(engagement_id), "status": "created",
-                "error": f"engagement created but recon kickoff failed: {exc}"}
-
-    trace.record_for(engagement_id, "orchestrator", "kickoff",
-                     {"agent": "recon", "directive": directive})
-    return {"engagement_id": str(engagement_id), "status": "running",
-            "message": "Engagement started; recon is running."}
 
 
 async def engagement_status(engagement_id: str) -> dict[str, Any]:
@@ -580,70 +394,6 @@ async def get_loot(engagement_id: str) -> dict[str, Any]:
     return {"engagement_id": str(eid), "count": len(loot), "loot": loot}
 
 
-async def resume_engagement(engagement_id: str) -> dict[str, Any]:
-    """Continue a run that was PAUSED by stop_after.
-
-    After a "probe" run you get the surface; after a "recon" run you get graded
-    findings — call this to proceed. A probe resumes into a full recon (the surface
-    had no findings); a recon resumes into the vulnerability stage and the rest of
-    the pipeline. Only a paused (still-running) engagement can resume.
-
-    Args:
-        engagement_id: The paused engagement to continue.
-    """
-    eid = _uuid(engagement_id)
-    if eid is None:
-        return {"error": f"not a valid engagement id: {engagement_id!r}"}
-    st = _status(eid)
-    if st is None:
-        return {"error": f"no such engagement: {engagement_id}"}
-    if st.get("status") != "running":
-        return {"error": f"engagement is {st.get('status')}; only a paused run resumes"}
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT payload->>'stop_after' FROM agent_results "
-                    "WHERE engagement_id = %s AND agent = 'recon'", (str(eid),))
-        row = cur.fetchone()
-    marker = row[0] if row else None
-    from orchestrator import main as orch  # lazy: same process, avoids import cycle
-
-    async def _post(agent: str, handoff: ChainHandoff) -> None:
-        # Own client — the orchestrator's _kickoff_agent uses an app-loop-bound shared
-        # client that is not valid in this control-MCP thread, so we POST ourselves
-        # exactly as create_engagement does for the recon kickoff.
-        token = load_own_token()
-        async with httpx.AsyncClient(verify=client_ssl_context(),
-                                     timeout=httpx.Timeout(30.0, connect=5.0)) as client:
-            resp = await client.post(f"https://agent-{agent}:8443/run",
-                                     content=handoff.model_dump_json(),
-                                     headers=bearer_headers(token))
-            resp.raise_for_status()
-
-    if marker == "recon":
-        p = orch._load_prev_output(eid, "recon")
-        directive = await orch._compose_directive(
-            "vuln", "recon", p.get("results", {}) or {}, objective=p.get("objective", ""))
-        handoff = ChainHandoff(
-            engagement_id=eid, from_component="orchestrator",
-            target_url=p["target_url"], scope=p["scope"],
-            time_window=p.get("time_window"), results=p.get("results", {}) or {},
-            directive=directive, credentials=p.get("credentials", {}))
-        await _post("vuln", handoff)
-        return {"engagement_id": str(eid), "status": "resumed", "dispatched": "vuln",
-                "message": "recon findings approved — vulnerability stage dispatched."}
-    if marker == "probe":
-        p = orch._load_prev_output(eid, None)
-        handoff = ChainHandoff(
-            engagement_id=eid, from_component="orchestrator",
-            target_url=p["target_url"], scope=p["scope"],
-            time_window=p.get("time_window"), results={},
-            directive=_recon_directive(p.get("objective", "")),
-            credentials=p.get("credentials", {}), scan_mode="default", stop_after="")
-        await _post("recon", handoff)
-        return {"engagement_id": str(eid), "status": "resumed", "dispatched": "recon (full)",
-                "message": "surface probe approved — full recon dispatched."}
-    return {"error": "this engagement is not paused at a probe/recon checkpoint"}
-
-
 async def get_probe_summary(engagement_id: str) -> dict[str, Any]:
     """The Phase-0/0.5 surface map a probe (or any recon) produced: the summary, surface
     counts, the API/file paths, and the peek behaviour map (per route: inputs + on-load
@@ -837,71 +587,11 @@ async def search_run(engagement_id: str, query: str,
 
 
 # --------------------------------------------------------------------------- #
-# Registration + entry point (run in a daemon thread from orchestrator.main)
+# Schema bootstrap
+#
+# These query functions are reused as-is by ``apts.serve`` (the launchable twin),
+# which imports them and registers them on its own MCP server. This module no
+# longer stands up a server of its own.
 # --------------------------------------------------------------------------- #
 
-def _register() -> list[str]:
-    tools = {
-        "apts_capabilities": ("Explain what APTS can do and which parameters an "
-                              "engagement needs."),
-        "create_engagement": ("Validate parameters, create the engagement, and "
-                              "start the recon stage."),
-        "engagement_status": "Report overall + per-stage status of an engagement.",
-        "stop_engagement": "Cancel an engagement (cooperative stop).",
-        "list_engagements": ("List recent engagements (newest first) with their ids "
-                             "and status; use it to find the latest or resolve which "
-                             "engagement the user means."),
-        "list_artifacts": "List which stages have produced an artifact.",
-        "get_artifact": ("Fetch one stage's artifact — whole, or pass query=<text> "
-                         "to return only matching items from a large artifact."),
-        "get_directives": ("Show the directive each stage was dispatched with, in "
-                           "order, plus the engagement objective — audit how the "
-                           "objective steered the run."),
-        "get_loot": ("Return the exploit stage's collected loot (credentials, "
-                     "tokens, DB info, ...) with full values."),
-        "get_recon_findings": ("Return recon's graded findings (what/where/category/"
-                               "grade/reason), highest grade first; grade= to filter."),
-        "get_recon_summary": ("Return recon's attack-surface summary + surface counts "
-                              "(endpoints/api_paths/observed/findings)."),
-        "get_recon_peek": ("Return recon's Phase-0.5 peek behaviour map (per route: "
-                           "inputs, buttons, on-load XHR)."),
-        "resume_engagement": ("Continue a run paused by stop_after — a probe resumes to "
-                              "full recon, a recon resumes to vuln + the rest."),
-        "get_probe_summary": ("Return the Phase-0/0.5 surface map (summary, counts, API "
-                              "paths, peek behaviour map) a probe/recon produced."),
-        "get_report": ("Return the adviser client report as Markdown — for the composer "
-                       "to open (render MD->HTML) and download as .md/.html."),
-        "search_run": ("Search the full raw run data (artifacts + execution trace, "
-                       "incl. raw tool responses) for a substring and return the "
-                       "surrounding text — recover exact values summaries shortened."),
-    }
-    fns = {"apts_capabilities": apts_capabilities,
-           "create_engagement": create_engagement,
-           "engagement_status": engagement_status,
-           "stop_engagement": stop_engagement,
-           "list_engagements": list_engagements,
-           "list_artifacts": list_artifacts,
-           "get_artifact": get_artifact,
-           "get_directives": get_directives,
-           "get_loot": get_loot,
-           "get_recon_findings": get_recon_findings,
-           "get_recon_summary": get_recon_summary,
-           "get_recon_peek": get_recon_peek,
-           "resume_engagement": resume_engagement,
-           "get_probe_summary": get_probe_summary,
-           "get_report": get_report,
-           "search_run": search_run}
-    for name, desc in tools.items():
-        control.tool(description=desc)(fns[name])
-    return list(tools)
-
-
 _ensure_schema()   # add engagements.objective on an older DB before first use
-_registered = _register()
-
-
-def serve(port: int | None = None) -> None:
-    """Run the control MCP server (streamable-HTTP). Called in a daemon thread."""
-    port = port or int(os.environ.get("APTS_CONTROL_MCP_PORT", "9100"))
-    log.info("orchestrator control MCP server tools: %s", ", ".join(_registered))
-    control.run(transport="streamable-http", host="0.0.0.0", port=port)

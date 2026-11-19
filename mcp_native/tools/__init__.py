@@ -21,7 +21,6 @@ from mcp_native.tools import (
     probe_tool,
     recon_record_tool,
     recon_tool,
-    sandbox_tool,
     sqlmap_tool,
     xss_prove,
 )
@@ -29,7 +28,7 @@ from mcp_native.tools import (
 # The modules server.py will register, in order. Add new tool modules here.
 ALL = (http_tool, xss_prove, recon_tool, sqlmap_tool, hacktricks_tool,
        crawl_tool, crawl_v2_tool, katana_tool, ffuf_tool, arjun_tool,
-       playwright_live, attack_tool, sandbox_tool,
+       playwright_live, attack_tool,
        probe_tool, recon_record_tool)
 
 

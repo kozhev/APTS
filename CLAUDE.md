@@ -80,15 +80,13 @@ make serve-nodb           # memory mode (--storage memory --no-db-tools)
 ## How the Runner reaches the tools container (the critical seam)
 `mcp-native` serves genuine MCP over plain HTTP at **`http://127.0.0.1:9000/mcp`**.
 **It performs no authentication of its own** — there is no bearer token or mTLS on the
-server (see `mcp_native/server.py`; the `mcp-native.token` secret it mounts is used only by
-the `sandbox_run` tool to call the sandbox container, which the lean stack does not run).
+server (see `mcp_native/server.py`).
 So the host Runner connects with a plain MCP client and **no credentials**. The only env it
 needs is `APTS_MCP_URL=http://127.0.0.1:9000/mcp` (set by `make run` / `make run-nodb`).
 
 Note: the `script` pipeline stage has been removed — the pipeline is now
 recon → vuln → mitre → exploit → adviser (exploit does the critical work; the adviser
-produces the report). The `sandbox_run` tool is in any case unavailable in the lean stack
-because no sandbox container runs. All other tools (http_request, crawler, recon lookup,
+produces the report). All other tools (http_request, crawler, recon lookup,
 sqlmap, katana/ffuf, ATT&CK/HackTricks lookup) work.
 
 ## Environment the Runner reads (all set for you by the Makefile)
